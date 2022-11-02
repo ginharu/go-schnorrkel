@@ -25,7 +25,7 @@ package main
 import (
 	"fmt"
 	
-	schnorrkel "github.com/ChainSafe/go-schnorrkel"
+	schnorrkel "github.com/ginharu/go-schnorrkel"
 )
 
 func main() {
