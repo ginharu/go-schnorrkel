@@ -13,32 +13,16 @@ func VerifyBatch(transcripts []*merlin.Transcript, signatures []*Signature, pubk
 		return false, errors.New("the number of transcripts, signatures, and public keys must be equal")
 	}
 
-	if len(transcripts) == 0 {
-		return true, nil
-	}
-
-	var err error
 	zero := r255.NewElement().Zero()
-	zs := make([]*r255.Scalar, len(transcripts))
-	for i := range zs {
-		zs[i], err = NewRandomScalar()
-		if err != nil {
-			return false, err
-		}
-	}
 
 	// compute H(R_i || P_i || m_i)
 	hs := make([]*r255.Scalar, len(transcripts))
 	s := make([]r255.Scalar, len(transcripts))
 	for i, t := range transcripts {
-		if t == nil {
-			return false, errors.New("transcript provided was nil")
-		}
-
 		t.AppendMessage([]byte("proto-name"), []byte("Schnorr-sig"))
-		pubc := pubkeys[i].Encode()
+		pubc := pubkeys[i].Compress()
 		t.AppendMessage([]byte("sign:pk"), pubc[:])
-		t.AppendMessage([]byte("sign:R"), signatures[i].r.Encode([]byte{}))
+		t.AppendMessage([]byte("sign:R"), signatures[i].R.Encode([]byte{}))
 
 		h := t.ExtractBytes([]byte("sign:c"), 64)
 		s[i] = *r255.NewScalar()
@@ -46,39 +30,29 @@ func VerifyBatch(transcripts []*merlin.Transcript, signatures []*Signature, pubk
 		hs[i].FromUniformBytes(h)
 	}
 
-	// compute ∑ z_i P_i H(R_i || P_i || m_i)
+	// compute ∑ P_i H(R_i || P_i || m_i)
 	ps := make([]*r255.Element, len(pubkeys))
 	for i, p := range pubkeys {
-		if p == nil {
-			return false, errors.New("public key provided was nil")
-		}
-
-		ps[i] = r255.NewElement().ScalarMult(zs[i], p.key)
+		ps[i] = p.key
 	}
 
-	phs := r255.NewElement().VarTimeMultiScalarMult(hs, ps)
+	phs := r255.NewElement().MultiScalarMult(hs, ps)
 
-	// compute ∑ z_i s_i and ∑ z_i R_i
+	// compute ∑ s_0 ... s_n and  ∑ R_0 ... R_n
 	ss := r255.NewScalar()
 	rs := r255.NewElement()
-	for i, s := range signatures {
-		if s == nil {
-			return false, errors.New("signature provided was nil")
-		}
-
-		zsi := r255.NewScalar().Multiply(s.s, zs[i])
-		ss = r255.NewScalar().Add(ss, zsi)
-		zri := r255.NewElement().ScalarMult(zs[i], s.r)
-		rs = r255.NewElement().Add(rs, zri)
+	for _, s := range signatures {
+		ss = r255.NewScalar().Add(ss, s.S)
+		rs = r255.NewElement().Add(rs, s.R)
 	}
 
-	// ∑ z_i P_i H(R_i || P_i || m_i) + ∑ R_i
+	// ∑ P_i H(R_i || P_i || m_i) + ∑ R_i
 	z := r255.NewElement().Add(phs, rs)
 
-	// B ∑ z_i  s_i
+	// B ∑ s_i
 	sb := r255.NewElement().ScalarBaseMult(ss)
 
-	// check  -B ∑ z_i s_i + ∑ z_i P_i H(R_i || P_i || m_i) + ∑ z_i R_i = 0
+	// check  -B ∑ s_i + ∑ P_i H(R_i || P_i || m_i) + ∑ R_i = 0
 	sb_neg := r255.NewElement().Negate(sb)
 	res := r255.NewElement().Add(sb_neg, z)
 
@@ -86,10 +60,10 @@ func VerifyBatch(transcripts []*merlin.Transcript, signatures []*Signature, pubk
 }
 
 type BatchVerifier struct {
-	hs      []*r255.Scalar  // transcript scalar
-	ss      *r255.Scalar    // sum of signature.S: ∑ z_i s_i
-	rs      *r255.Element   // sum of signature.R: ∑ z_i R_i
-	pubkeys []*r255.Element // z_i P_i
+	hs      []*r255.Scalar // transcript scalar
+	ss      *r255.Scalar   // sum of signature.S: ∑ s_0 ... s_n
+	rs      *r255.Element  // sum of signature.R: ∑ R_0 ... R_n
+	pubkeys []*r255.Element
 }
 
 func NewBatchVerifier() *BatchVerifier {
@@ -114,44 +88,36 @@ func (v *BatchVerifier) Add(t *merlin.Transcript, sig *Signature, pubkey *Public
 		return errors.New("provided public key is nil")
 	}
 
-	z, err := NewRandomScalar()
-	if err != nil {
-		return err
-	}
-
 	t.AppendMessage([]byte("proto-name"), []byte("Schnorr-sig"))
-	pubc := pubkey.Encode()
+	pubc := pubkey.Compress()
 	t.AppendMessage([]byte("sign:pk"), pubc[:])
-	t.AppendMessage([]byte("sign:R"), sig.r.Encode([]byte{}))
+	t.AppendMessage([]byte("sign:R"), sig.R.Encode([]byte{}))
 
 	h := t.ExtractBytes([]byte("sign:c"), 64)
 	s := r255.NewScalar()
 	s.FromUniformBytes(h)
 	v.hs = append(v.hs, s)
 
-	zs := r255.NewScalar().Multiply(z, sig.s)
-	v.ss.Add(v.ss, zs)
-	zr := r255.NewElement().ScalarMult(z, sig.r)
-	v.rs.Add(v.rs, zr)
+	v.ss.Add(v.ss, sig.S)
+	v.rs.Add(v.rs, sig.R)
 
-	p := r255.NewElement().ScalarMult(z, pubkey.key)
-	v.pubkeys = append(v.pubkeys, p)
+	v.pubkeys = append(v.pubkeys, pubkey.key)
 	return nil
 }
 
 func (v *BatchVerifier) Verify() bool {
 	zero := r255.NewElement().Zero()
 
-	// compute ∑ z_i P_i H(R_i || P_i || m_i)
-	phs := r255.NewElement().VarTimeMultiScalarMult(v.hs, v.pubkeys)
+	// compute ∑ P_i H(R_i || P_i || m_i)
+	phs := r255.NewElement().MultiScalarMult(v.hs, v.pubkeys)
 
-	// ∑ z_i P_i H(R_i || P_i || m_i) + ∑ z_i R_i
+	// ∑ P_i H(R_i || P_i || m_i) + ∑ R_i
 	z := r255.NewElement().Add(phs, v.rs)
 
-	// B ∑ z_i s_i
+	// B ∑ s_i
 	sb := r255.NewElement().ScalarBaseMult(v.ss)
 
-	// check  -B ∑ z_i s_i + ∑ z_i P_i H(R_i || P_i || m_i) + ∑ z_i R_i = 0
+	// check  -B ∑ s_i + ∑ P_i H(R_i || P_i || m_i) + ∑ R_i = 0
 	sb_neg := r255.NewElement().Negate(sb)
 	res := r255.NewElement().Add(sb_neg, z)
 

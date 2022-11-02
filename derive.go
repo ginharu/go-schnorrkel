@@ -3,7 +3,6 @@ package schnorrkel
 import (
 	"crypto/rand"
 	"errors"
-
 	"github.com/gtank/merlin"
 	r255 "github.com/gtank/ristretto255"
 )
@@ -11,7 +10,7 @@ import (
 const ChainCodeLength = 32
 
 var (
-	ErrDeriveHardKeyType = errors.New("cannot derive hard key type, DerivableKey must be of type SecretKey")
+	ErrDeriveHardKeyType = errors.New("Failed to derive hard key type, DerivableKey must be a SecretKey")
 )
 
 // DerivableKey implements DeriveKey
@@ -93,9 +92,9 @@ func (ek *ExtendedKey) HardDeriveMiniSecretKey(i []byte) (*ExtendedKey, error) {
 // DeriveKeyHard derives a Hard subkey identified by the byte array i and chain
 // code
 func DeriveKeyHard(key DerivableKey, i []byte, cc [ChainCodeLength]byte) (*ExtendedKey, error) {
-	switch k := key.(type) {
+	switch key.(type) {
 	case *SecretKey:
-		msk, resCC, err := k.HardDeriveMiniSecretKey(i, cc)
+		msk, resCC, err := key.(*SecretKey).HardDeriveMiniSecretKey(i, cc)
 		if err != nil {
 			return nil, err
 		}
@@ -126,10 +125,7 @@ func (sk *SecretKey) DeriveKey(t *merlin.Transcript, cc [ChainCodeLength]byte) (
 		return nil, err
 	}
 
-	sc, dcc, err := pub.DeriveScalarAndChaincode(t, cc)
-	if err != nil {
-		return nil, err
-	}
+	sc, dcc := pub.DeriveScalarAndChaincode(t, cc)
 
 	// TODO: need transcript RNG to match rust-schnorrkel
 	// see: https://github.com/w3f/schnorrkel/blob/798ab3e0813aa478b520c5cf6dc6e02fd4e07f0a/src/derive.rs#L186
@@ -171,8 +167,8 @@ func (sk *SecretKey) HardDeriveMiniSecretKey(i []byte, cc [ChainCodeLength]byte)
 	skenc := sk.Encode()
 	t.AppendMessage([]byte("secret-key"), skenc[:])
 
-	msk := [MiniSecretKeySize]byte{}
-	mskBytes := t.ExtractBytes([]byte("HDKD-hard"), MiniSecretKeySize)
+	msk := [MiniSecretKeyLength]byte{}
+	mskBytes := t.ExtractBytes([]byte("HDKD-hard"), MiniSecretKeyLength)
 	copy(msk[:], mskBytes)
 
 	ccRes := [ChainCodeLength]byte{}
@@ -194,23 +190,12 @@ func (mk *MiniSecretKey) HardDeriveMiniSecretKey(i []byte, cc [ChainCodeLength]b
 
 // DeriveKey derives an Extended Key from the Mini Secret Key
 func (mk *MiniSecretKey) DeriveKey(t *merlin.Transcript, cc [ChainCodeLength]byte) (*ExtendedKey, error) {
-	if t == nil {
-		return nil, errors.New("transcript provided is nil")
-	}
-
 	sk := mk.ExpandEd25519()
 	return sk.DeriveKey(t, cc)
 }
 
 func (pk *PublicKey) DeriveKey(t *merlin.Transcript, cc [ChainCodeLength]byte) (*ExtendedKey, error) {
-	if t == nil {
-		return nil, errors.New("transcript provided is nil")
-	}
-
-	sc, dcc, err := pk.DeriveScalarAndChaincode(t, cc)
-	if err != nil {
-		return nil, err
-	}
+	sc, dcc := pk.DeriveScalarAndChaincode(t, cc)
 
 	// derivedPk = pk + (sc * g)
 	p1 := r255.NewElement().ScalarBaseMult(sc)
@@ -228,11 +213,7 @@ func (pk *PublicKey) DeriveKey(t *merlin.Transcript, cc [ChainCodeLength]byte) (
 }
 
 // DeriveScalarAndChaincode derives a new scalar and chain code from an existing public key and chain code
-func (pk *PublicKey) DeriveScalarAndChaincode(t *merlin.Transcript, cc [ChainCodeLength]byte) (*r255.Scalar, [ChainCodeLength]byte, error) {
-	if t == nil {
-		return nil, [ChainCodeLength]byte{}, errors.New("transcript provided is nil")
-	}
-
+func (pk *PublicKey) DeriveScalarAndChaincode(t *merlin.Transcript, cc [ChainCodeLength]byte) (*r255.Scalar, [ChainCodeLength]byte) {
 	t.AppendMessage([]byte("chain-code"), cc[:])
 	pkenc := pk.Encode()
 	t.AppendMessage([]byte("public-key"), pkenc[:])
@@ -244,5 +225,5 @@ func (pk *PublicKey) DeriveScalarAndChaincode(t *merlin.Transcript, cc [ChainCod
 	ccBytes := t.ExtractBytes([]byte("HDKD-chaincode"), ChainCodeLength)
 	ccRes := [ChainCodeLength]byte{}
 	copy(ccRes[:], ccBytes)
-	return sc, ccRes, nil
+	return sc, ccRes
 }

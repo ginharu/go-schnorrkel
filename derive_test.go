@@ -1,27 +1,33 @@
 package schnorrkel
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/blake2b"
 )
 
 func TestDeriveKey(t *testing.T) {
 	priv, _, err := GenerateKeypair()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	transcript := NewSigningContext([]byte("test"), []byte("noot"))
 	msg := []byte("hello")
 	cc := blake2b.Sum256(msg)
 	_, err = priv.DeriveKey(transcript, cc)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDerivePublicAndPrivateMatch(t *testing.T) {
 	priv, pub, err := GenerateKeypair()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	transcriptPriv := NewSigningContext([]byte("test"), []byte("noot"))
 	transcriptPub := NewSigningContext([]byte("test"), []byte("noot"))
@@ -29,30 +35,41 @@ func TestDerivePublicAndPrivateMatch(t *testing.T) {
 	cc := blake2b.Sum256(msg)
 
 	dpriv, err := priv.DeriveKey(transcriptPriv, cc)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// confirm chain codes are the same for private and public paths
 	dpub, _ := pub.DeriveKey(transcriptPub, cc)
-	require.Equal(t, dpriv.chaincode, dpub.chaincode)
+	if !bytes.Equal(dpriv.chaincode[:], dpub.chaincode[:]) {
+		t.Fatalf("Fail: chaincodes do not match: pub.chaincode %x priv.chaincode %x", dpub.chaincode, dpriv.chaincode)
+	}
 
 	dpub2, err := dpriv.key.(*SecretKey).Public()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pubbytes := dpub.key.Encode()
 	pubFromPrivBytes := dpub2.Encode()
 
 	// confirm public keys are the same from private and public paths
-	require.Equal(t, pubbytes, pubFromPrivBytes)
+	if !bytes.Equal(pubbytes[:], pubFromPrivBytes[:]) {
+		t.Fatalf("Fail: public key mismatch: pub %x pub from priv %x", pubbytes, pubFromPrivBytes)
+	}
 
 	signingTranscript := NewSigningContext([]byte("test"), []byte("signme"))
 	verifyTranscript := NewSigningContext([]byte("test"), []byte("signme"))
 	sig, err := dpriv.key.(*SecretKey).Sign(signingTranscript)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// confirm that key derived from public path can verify signature derived from private path
-	ok, err := dpub.key.(*PublicKey).Verify(sig, verifyTranscript)
-	require.NoError(t, err)
-	require.True(t, ok)
+	ok := dpub.key.(*PublicKey).Verify(sig, verifyTranscript)
+	if !ok {
+		t.Fatal("did not verify")
+	}
 }
 
 func TestDeriveSoft(t *testing.T) {
@@ -96,16 +113,22 @@ type commonVectors struct {
 // deriveCommon provides common functions for testing Soft and Hard key derivation
 func deriveCommon(t *testing.T, vec commonVectors) {
 	kp, err := hex.DecodeString(vec.KeyPair)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cc, err := hex.DecodeString(vec.ChainCode)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	privBytes := [32]byte{}
 	copy(privBytes[:], kp[:32])
 	priv := new(SecretKey)
 	err = priv.Decode(privBytes)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ccBytes := [32]byte{}
 	copy(ccBytes[:], cc)
@@ -117,14 +140,24 @@ func deriveCommon(t *testing.T, vec commonVectors) {
 	} else {
 		derived, err = DeriveKeySimple(priv, []byte{}, ccBytes)
 	}
-	require.NoError(t, err)
+
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	expectedPub, err := hex.DecodeString(vec.Public)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	resultPub, err := derived.Public()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	resultPubBytes := resultPub.Encode()
-	require.Equal(t, expectedPub, resultPubBytes[:])
+
+	if !bytes.Equal(expectedPub, resultPubBytes[:]) {
+		t.Fatalf("Fail: got %x expected %x", resultPubBytes, expectedPub)
+	}
 }
